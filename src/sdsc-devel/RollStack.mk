@@ -25,6 +25,8 @@ __SDSCDEVEL_ROLLSTACK_MK = yes
 # * ROLLMPI - the ROLLMPI value passed to the roll's make invocation
 # * ROLLOPTS - the ROLLOPTS value passed to the roll's make invocation
 # * ROLLPY - the ROLLPY value passed to the roll's make invocation
+# * PUT - the recipe steps used for committing changes to this roll's source,
+#   evaluated from within the roll dir.
 # * USER - the user used to run the roll's test
 #
 # ROLLDEF uses a default value for any of these that are not specified in the
@@ -34,6 +36,7 @@ __SDSCDEVEL_ROLLSTACK_MK = yes
 #
 # * DEFAULT_GET = (empty)
 # * DEFAULT_PREREQS = (empty)
+# * DEFAULT_PUT = (empty)
 # * DEFAULT_ROLLCOMPILER = gnu
 # * DEFAULT_ROLLMPI = rocks-openmpi
 # * DEFAULT_ROLLOPTS = (empty)
@@ -44,6 +47,8 @@ __SDSCDEVEL_ROLLSTACK_MK = yes
 # the roll ('%' stands for the roll name).
 #
 # %-build - make the roll's default target
+# %-checknodes - test for built rpms that are not installed by any node file
+# %-commit - commit changes to the roll source
 # %-distclean - make the roll's distclean target
 # %-install - install the rpms produced by the roll build.  No post sections
 #   from the roll's node file(s) are executed.
@@ -61,6 +66,9 @@ ifndef DEFAULT_GET
 endif
 ifndef DEFAULT_PREREQS
   DEFAULT_PREREQS =
+endif
+ifndef DEFAULT_PUT
+  DEFAULT_PUT =
 endif
 ifndef DEFAULT_ROLLCOMPILER
   DEFAULT_ROLLCOMPILER = gnu
@@ -80,6 +88,7 @@ endif
 
 ROLLDEF = \
   $(eval $(1)_GET = $(DEFAULT_GET)) \
+  $(eval $(1)_PUT = $(DEFAULT_PUT)) \
   $(eval $(1)_ROLLCOMPILER = $(DEFAULT_ROLLCOMPILER)) \
   $(eval $(1)_ROLLMPI = $(DEFAULT_ROLLMPI)) \
   $(eval $(1)_ROLLOPTS = $(DEFAULT_ROLLOPTS)) \
@@ -101,6 +110,14 @@ THIS_MAKEFILE = $(firstword $(MAKEFILE_LIST))
 
 %-build: %-roll/RPMS/TIMESTAMP
 	
+
+%-commit: %-roll
+	put='$($(*)_PUT)'; \
+	if test -z "$$put"; then \
+	  put='$(call DEFAULT_PUT,$(*))'; \
+	fi; \
+	cd $(*)-roll; eval "$$put"
+
 %-distclean:
 	if test -d $*-roll; then \
 	  cd $*-roll; \
@@ -108,6 +125,7 @@ THIS_MAKEFILE = $(firstword $(MAKEFILE_LIST))
 	fi
 
 %-install: /root/rolltests/%.t
+	
 
 %-prereqs:
 	for PREREQ in $(patsubst %,/root/rolltests/%.t,$($(*)_PREREQS)); do \
@@ -118,7 +136,11 @@ THIS_MAKEFILE = $(firstword $(MAKEFILE_LIST))
 	/bin/rm -fr $*-roll
 
 %-roll:
-	$($(*)_GET)
+	get='$($(*)_GET)'; \
+	if test -z "$$get"; then \
+	  get='$(call DEFAULT_GET,$(*))'; \
+	fi; \
+	eval "$$get"
 
 %-roll/RPMS/TIMESTAMP:
 	$(MAKE) -f $(THIS_MAKEFILE) $*-prereqs
@@ -126,8 +148,9 @@ THIS_MAKEFILE = $(firstword $(MAKEFILE_LIST))
 	cd $*-roll; \
 	if test -x bootstrap.sh; then \
 	  ./bootstrap.sh; \
-	fi
-	$($(*)_MAKE) > build.log 2>&1
+	fi; \
+	echo $($(*)_MAKE) > build.log 2>&1; \
+	$($(*)_MAKE) >> build.log 2>&1
 	if find $*-roll -name \*.iso; then \
 	  touch $@; \
 	fi
@@ -142,7 +165,7 @@ THIS_MAKEFILE = $(firstword $(MAKEFILE_LIST))
 	         -e 'print "$$p ";' | sort | uniq`; \
 	built=`ls $*-roll/RPMS/*/*.rpm`; \
 	for F in $$packs roll-$*-kickstart; do \
-	  built=`echo $$built | sed "s/[^ ]*\/$$F-[0-9][^ ]* *//"`; \
+	  built=`echo $$built | sed "s/[^ ]*\/$$F-[^ ]* *//"`; \
 	done; \
 	if test -n "$$built"; then \
 	  echo "WARNING: rpm(s) '$$built' not referenced in node file(s)"; \
@@ -170,7 +193,7 @@ THIS_MAKEFILE = $(firstword $(MAKEFILE_LIST))
 	         -e 'next unless ($$p) = /<package>\s*([^\s<]+)/;' \
 	         -e 'map($$p =~ s/((\S*)COMPILERNAME(\S*))/$$2$$_$$3 $$1/g, split(/\s+/, "$($(*)_ROLLCOMPILER)"));' \
 	         -e 'map($$p =~ s/((\S*)MPINAME(\S*))/$$2$$_$$3 $$1/g, split(/\s+/, "$($(*)_ROLLMPI)"));' \
-	         -e 'map($$p =~ s/((\S*)PYVERSION(\S*))/$${2}2.7$$3 $$1/g, split(/\s+/, "$($(*)_ROLLMPI)"));' \
+	         -e 'map($$p =~ s/((\S*)PYVERSION(\S*))/$${2}2.7$$3 $$1/g, split(/\s+/, "$($(*)_ROLLPY)"));' \
 	         -e '$$p =~ s/(\S*)(COMPILERNAME|MPINAME|PYVERSION)(\S*)//g;' \
 	         -e 'print "$$p ";' | sort | uniq`; \
 	for F in $$packs roll-$*-kickstart; do \
@@ -178,13 +201,14 @@ THIS_MAKEFILE = $(firstword $(MAKEFILE_LIST))
 	done
 
 %-vars:
+	@echo $(*)_GET '$($(*)_GET)'
+	@echo $(*)_MAKE '$($(*)_MAKE)'
+	@echo $(*)_PREREQS '$($(*)_PREREQS)'
+	@echo $(*)_PUT '$($(*)_PUT)'
 	@echo $(*)_ROLLCOMPILER '$($(*)_ROLLCOMPILER)'
 	@echo $(*)_ROLLMPI '$($(*)_ROLLMPI)'
-	@echo $(*)_ROLLPY '$($(*)_ROLLPY)'
 	@echo $(*)_ROLLOPTS '$($(*)_ROLLOPTS)'
-	@echo $(*)_GET '$($(*)_GET)'
-	@echo $(*)_PREREQS '$($(*)_PREREQS)'
-	@echo $(*)_MAKE '$($(*)_MAKE)'
+	@echo $(*)_ROLLPY '$($(*)_ROLLPY)'
 	@echo ALL_PREREQS $(ALL_PREREQS)
 
 %-packages: %-roll
